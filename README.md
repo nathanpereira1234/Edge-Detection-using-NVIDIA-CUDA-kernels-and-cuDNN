@@ -1,4 +1,3 @@
-# Edge Detection using NVIDIA CUDA kernels and cuDNN
 # Edge Detection with CUDA Kernels and cuDNN — Reproduction & Extension
 
 A GPU image/video edge-detection pipeline (Sobel-style edges, smoothed and in-painted back into the original frame) built from custom CUDA kernels, cuDNN convolutions, and a CUDA graph.
@@ -58,34 +57,32 @@ These are **not my measurements**. My own numbers on my own hardware are in [My 
 
 ## What I changed
 
-<!-- Fill this in as you make real changes. Delete any line that isn't true. -->
-
-- [ ] Rebuilt and ran the inherited baseline on my own machine (see hardware below)
-- [ ] Profiled the baseline with NVIDIA Nsight Systems to find where per-frame time goes
-- [ ] **Optimization:** _e.g. pinned (page-locked) host memory + `cudaMemcpyAsync` on a stream_
-- [ ] **Optimization:** _e.g. host↔device copies moved inside the CUDA graph_
-- [ ] _Any other fix, feature, or refactor, with a link to the commit_
+- [x] Rebuilt and ran the inherited baseline on my own setup (Google Colab, Tesla T4)
+- [x] **Optimization:** page-locked (pinned) host memory for the CPU-side frame buffers. A custom STL allocator (`include/pinned_allocator.hpp`) backs `ImageCPU` with `cudaMallocHost` / `cudaFreeHost`, so host↔device copies DMA directly instead of going through the driver's staging buffer. Only `ImageCPU`'s storage type changed (`include/types.hpp`); the pipeline itself is untouched.
+- [x] Verified correctness: the output for `data/Lena.png` is byte-identical before and after the change.
 
 ---
 
 ## My results
 
-**Hardware / software:** _GPU model · driver version · CUDA version · cuDNN version · OS_
-**Test input:** _clip name, resolution, fps, duration_
+**Hardware / software:** Google Colab · Tesla T4 (driver 580.82.07) · CUDA 12.8 · cuDNN 9.8.0 · Ubuntu 24.04.1 LTS
+**Test input:** ffmpeg `testsrc2` pattern, 1280×720, 25 fps, 10 s (250 frames)
+**Method:** 3 runs per version, median of the per-frame times
 
 | Version | GPU time per frame | Excl. I/O per frame | Total incl. I/O per frame |
 |---|---|---|---|
-| Inherited baseline (my machine) | _TBD_ | _TBD_ | _TBD_ |
-| + _my optimization 1_ | _TBD_ | _TBD_ | _TBD_ |
-| + _my optimization 2_ | _TBD_ | _TBD_ | _TBD_ |
+| Inherited baseline (my machine) | 2.70 ms | 4.37 ms | 12.25 ms |
+| + pinned host memory | 2.48 ms | 3.19 ms | 11.12 ms |
 
-**What I learned:** _2–4 sentences: what the profiler showed, what helped, what didn't._
+Host↔device transfer time per frame (excl. I/O minus GPU time) fell from **1.67 ms to 0.71 ms (−57%)**, and the non-I/O frame time fell by **27%**.
+
+**What I learned:** Once the inherited optimizations (reused handles, CUDA graph) had brought GPU compute down to about 2.7 ms per frame, the two pageable-memory copies made up more than a third of the non-I/O frame time. Pinning the host buffers removed most of that overhead without touching a single kernel. The small drop in the GPU row (2.70 → 2.48 ms) is within the run-to-run variation on a shared Colab GPU, so I don't attribute it to this change. File I/O (OpenCV decode/encode) now dominates total time at about 8 ms per frame, so that is the next bottleneck.
 
 ---
 
 ## Build and run
 
-**Tested on:** _fill in your OS / CUDA version once verified_ (upstream: Ubuntu 24.04, x86_64, CUDA 12.5)
+**Tested on:** Google Colab, Ubuntu 24.04, Tesla T4, CUDA 12.8, cuDNN 9.8 (upstream: Ubuntu 24.04, x86_64, CUDA 12.5)
 
 **Dependencies**
 
@@ -124,7 +121,7 @@ make clean
 ## Known limitations
 
 - A recorded CUDA graph is static, so the frame resolution must stay fixed for the whole video.
-- Possible further work: int8 or fully integer pipeline, batching multiple frames, overlapping CPU I/O with GPU work across threads.
+- Possible further work: overlapping CPU file I/O with GPU work (e.g. a decode thread plus double-buffered pinned frames and `cudaMemcpyAsync`), moving the copies into the CUDA graph, an integer-only pipeline, batching frames.
 
 ## License
 
